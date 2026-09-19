@@ -6,13 +6,16 @@ type ChatMessage = {
 };
 
 const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const VERTEX_LOCATION = "us-central1";
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  const accessToken = process.env.GCP_ACCESS_TOKEN;
+  const projectId = process.env.GCP_PROJECT_ID;
+
+  if (!apiKey && !accessToken) {
     return NextResponse.json(
-      { error: "GEMINI_API_KEY is not configured on the server." },
+      { error: "No Gemini credentials configured. Set GEMINI_API_KEY or GCP_ACCESS_TOKEN." },
       { status: 500 }
     );
   }
@@ -31,9 +34,27 @@ export async function POST(request: NextRequest) {
     parts: [{ text: message.content }],
   }));
 
-  const geminiResponse = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+  let url: string;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+  if (apiKey) {
+    // Gemini Developer API — stable API key auth
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  } else {
+    // Vertex AI endpoint — works with standard cloud-platform scoped GCP tokens
+    if (!projectId) {
+      return NextResponse.json(
+        { error: "GCP_PROJECT_ID is required when using GCP_ACCESS_TOKEN." },
+        { status: 500 }
+      );
+    }
+    url = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent`;
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
+  const geminiResponse = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ contents }),
   });
 
@@ -52,3 +73,4 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ reply });
 }
+
