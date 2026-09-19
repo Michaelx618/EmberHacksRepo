@@ -5,12 +5,60 @@
 import { GoogleGenAI } from "@google/genai";
 import { hashEmbed } from "./vector";
 
-export const MODEL = "gemini-3.8-flash";
-export const EMBED_MODEL = "gemini-embedding-2";
+// Verified against ListModels for this key: gemini-3.8-flash is not available,
+// gemini-3.6-flash is the newest flash on this tier. Override with GEMINI_MODEL.
+export const MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.6-flash";
+export const EMBED_MODEL = process.env.GEMINI_EMBED_MODEL?.trim() || "gemini-embedding-2";
 export const EMBED_DIM = 768;
 
+/**
+ * Set when the API answers that the project cannot pay (402) or is rate
+ * limited (429). A key that authenticates but cannot bill is WORSE than no
+ * key at all -- it turns every graceful offline fallback into a hard error
+ * mid-demo -- so once we see that, we behave as if the key were absent.
+ */
+let degraded: string | null = null;
+
+export function degradedReason(): string | null {
+  return degraded;
+}
+
+/** Call this after fixing billing, or restart the server. */
+export function clearDegraded(): void {
+  degraded = null;
+}
+
 export function hasApiKey(): boolean {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
+  return Boolean(process.env.GEMINI_API_KEY?.trim()) && degraded === null;
+}
+
+/** Recognise "the key is fine but the project can't serve this" failures. */
+export function noteIfUnavailable(e: unknown): void {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/\b402\b|prepayment credits|RESOURCE_EXHAUSTED|quota|\b429\b/i.test(msg)) {
+    degraded = /prepayment|402/i.test(msg)
+      ? "Gemini project has no credits (HTTP 402) - running on offline fallbacks."
+      : "Gemini quota exhausted (HTTP 429) - running on offline fallbacks.";
+    console.warn(`[gemini] ${degraded}`);
+  }
+}
+
+/** Run a live call, degrading to the offline path if the project can't serve it. */
+export async function live<T>(fn: () => Promise<T>, fallback: () => T | Promise<T>): Promise<T> {
+  if (!hasApiKey()) return fallback();
+  try {
+    return await fn();
+  } catch (e) {
+    noteIfUnavailable(e);
+    if (degraded) {
+      // Loud on purpose. A silent fallback to the offline embedder puts
+      // stored and queried vectors in different spaces, and retrieval then
+      // returns nothing with no error anywhere -- extremely hard to trace.
+      console.error("[gemini] FALLING BACK TO OFFLINE STUB:", e instanceof Error ? e.message : e);
+      return fallback();
+    }
+    throw e;
+  }
 }
 
 let client: GoogleGenAI | null = null;
@@ -25,17 +73,61 @@ function outputText(r: unknown): string {
   return o?.output_text ?? o?.outputText ?? "";
 }
 
+/**
+ * Undo JSON's escape rules eating LaTeX commands.
+ *
+ * A model writing `$\beta_0$` into a JSON string emits `\b` + "eta_0", and
+ * `\b` is a *legal* JSON escape (backspace) -- so JSON.parse succeeds and
+ * quietly returns "eta_0". Constrained decoding cannot catch this because the
+ * JSON is valid; it is only wrong. Same for \f (\frac -> rac), \t (\theta),
+ * \n (\nu), \r (\rho), \v (\vec).
+ *
+ * Backspace, form feed and vertical tab never legitimately appear in generated
+ * prose, so those are restored everywhere. Newline, tab and CR are legitimate
+ * prose, so those are only restored inside `$...$` math spans, where a literal
+ * newline is never what was meant. Implementation lives in lib/text.ts so the
+ * client UI can repair bodies without pulling in the Gemini SDK.
+ */
+import { repairLatexEscapes } from "./text";
+export { repairLatexEscapes };
+
+function repairDeep<T>(value: T): T {
+  if (typeof value === "string") return repairLatexEscapes(value) as unknown as T;
+  if (Array.isArray(value)) return value.map(repairDeep) as unknown as T;
+  if (value && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    for (const k of Object.keys(o)) o[k] = repairDeep(o[k]);
+  }
+  return value;
+}
+
+/**
+ * A backslash followed by anything JSON does not define as an escape can only
+ * have been a literal backslash -- i.e. LaTeX like `\ldots` or `\sigma`. Left
+ * alone these do not merely mangle the text, they make JSON.parse throw and
+ * cost the entire response to the fallback. Doubling them is unambiguous.
+ */
+export function repairInvalidEscapes(raw: string): string {
+  // Must consume `\X` as PAIRS: a lookahead-only scan sees the second backslash
+  // of an already-correct `\\ldots` and doubles it into invalid JSON.
+  return raw.replace(/\\([\s\S])/g, (m, c: string) =>
+    /["\\/bfnrtu]/.test(c) ? m : `\\\\${c}`,
+  );
+}
+
 function parseJson<T>(text: string, fallback: T): T {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const cleaned = repairInvalidEscapes(
+    text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, ""),
+  );
   try {
-    return JSON.parse(cleaned) as T;
+    return repairDeep(JSON.parse(cleaned) as T);
   } catch {
     // Models occasionally wrap JSON in prose; grab the outermost braces.
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
     if (start !== -1 && end > start) {
       try {
-        return JSON.parse(cleaned.slice(start, end + 1)) as T;
+        return repairDeep(JSON.parse(cleaned.slice(start, end + 1)) as T);
       } catch {
         /* fall through */
       }
@@ -72,8 +164,11 @@ export async function generateText(input: unknown, system?: string): Promise<str
  *  behaves sensibly against the fixture graph. */
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
-  if (!hasApiKey()) return texts.map((t) => hashEmbed(t, EMBED_DIM));
+  const offline = () => texts.map((t) => hashEmbed(t, EMBED_DIM));
+  return live(() => embedBatchLive(texts), offline);
+}
 
+async function embedBatchLive(texts: string[]): Promise<number[][]> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:batchEmbedContents`,
     {
@@ -133,15 +228,15 @@ export async function reconcile(
   existing: { title: string; body: string },
   similarity: number,
 ): Promise<ReconcileResult> {
-  if (!hasApiKey()) {
-    // Offline heuristic: identical-ish text reinforces, longer text supersedes.
+  // Offline heuristic: identical-ish text reinforces, longer text supersedes.
+  const offline = (): ReconcileResult => {
     if (similarity > 0.97) return { action: "reinforce", rationale: "[offline] near-identical restatement" };
     if (incoming.body.length > existing.body.length * 1.4)
       return { action: "supersede", rationale: "[offline] incoming explanation is substantially fuller", mergedBody: incoming.body };
     return { action: "reinforce", rationale: "[offline] same concept restated" };
-  }
+  };
 
-  return generateJSON<ReconcileResult>(
+  return live(() => generateJSON<ReconcileResult>(
     {
       type: "text",
       text: `A learner already has this concept in their notes:
@@ -164,7 +259,7 @@ Decide what happened:
     },
     RECONCILE_SCHEMA,
     { action: "reinforce", rationale: "fallback" },
-  );
+  ), offline);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +277,14 @@ export type RelationPair = {
   similarity: number;
 };
 
-export type ClassifiedRelation = { index: number; relation: Relation; strength: number; rationale: string };
+/** `relation: "none"` is the classifier rejecting the pair. The cosine floor is
+ *  deliberately permissive, so this is where precision actually comes from. */
+export type ClassifiedRelation = {
+  index: number;
+  relation: Relation | "none";
+  strength: number;
+  rationale: string;
+};
 
 const RELATIONS_SCHEMA = {
   type: "object",
@@ -193,7 +295,7 @@ const RELATIONS_SCHEMA = {
         type: "object",
         properties: {
           index: { type: "integer" },
-          relation: { type: "string", enum: [...RELATIONS] },
+          relation: { type: "string", enum: [...RELATIONS, "none"] },
           strength: { type: "number" },
           rationale: { type: "string" },
         },
@@ -208,14 +310,15 @@ const RELATIONS_SCHEMA = {
 export async function classifyRelations(pairs: RelationPair[]): Promise<ClassifiedRelation[]> {
   if (pairs.length === 0) return [];
 
-  if (!hasApiKey()) {
-    return pairs.map((p, index) => ({
+  const offline = (): ClassifiedRelation[] =>
+    pairs.map((p, index) => ({
       index,
       relation: "related" as Relation,
       strength: p.similarity,
       rationale: "[offline] similarity only",
     }));
-  }
+
+  if (!hasApiKey()) return offline();
 
   const listing = pairs
     .map(
@@ -224,7 +327,7 @@ export async function classifyRelations(pairs: RelationPair[]): Promise<Classifi
     )
     .join("\n\n");
 
-  const result = await generateJSON<{ relations: ClassifiedRelation[] }>(
+  const result = await live(() => generateJSON<{ relations: ClassifiedRelation[] }>(
     {
       type: "text",
       text: `For each pair below, classify how A relates to B. Direction matters.
@@ -234,6 +337,13 @@ export async function classifyRelations(pairs: RelationPair[]): Promise<Classifi
 - example_of: A is a concrete instance of B
 - contradicts: A and B make incompatible claims (be strict — only if they cannot both be true)
 - related: connected, but none of the above
+- none: NOT meaningfully connected -- reject the pair
+
+These pairs are nearest-neighbour candidates, not known-good links: they were
+selected by embedding proximity alone, which in one subject area makes almost
+everything look adjacent. Return "none" whenever a link would tell the learner
+nothing they could act on. Rejecting freely is expected and costs nothing; a
+graph where everything connects to everything carries no information at all.
 
 Give strength 0-1 and a rationale of at most 12 words.
 
@@ -241,7 +351,7 @@ ${listing}`,
     },
     RELATIONS_SCHEMA,
     { relations: [] },
-  );
+  ), () => ({ relations: offline() }));
 
   return result.relations ?? [];
 }
@@ -365,19 +475,27 @@ const RESEARCH_SCHEMA = {
 
 /** Structured output and google_search combine in one call. */
 export async function research(concept: { title: string; body: string }): Promise<ResearchResult> {
-  if (!hasApiKey()) {
-    return {
-      refinedSummary: "[offline] Set GEMINI_API_KEY to fact-check this against live sources.",
-      corrections: [], openQuestions: [], confirmed: [], sources: [],
-    };
-  }
+  const offline = (): ResearchResult => ({
+    refinedSummary:
+      degradedReason() ??
+      "[offline] A working GEMINI_API_KEY is needed to fact-check this against live sources.",
+    corrections: [], openQuestions: [], confirmed: [], sources: [],
+  });
+  return live(() => researchLive(concept), offline);
+}
 
+async function researchLive(concept: { title: string; body: string }): Promise<ResearchResult> {
   const r = await ai().interactions.create({
     model: MODEL,
     input: [
       {
         type: "text",
-        text: `Fact-check and enrich a student's own note. Search for authoritative sources.
+        text: `Fact-check and enrich a student's own note.
+
+You MUST run at least one Google Search before answering, even when you are
+already confident of the answer. The student needs a source they can click
+and check for themselves -- an uncited correction is worth far less to them
+than a cited one. Base every correction on what the search returns.
 
 CONCEPT: ${concept.title}
 THEIR NOTE: ${concept.body}
@@ -434,13 +552,11 @@ const QUESTION_SCHEMA = {
 };
 
 export async function generateQuestion(concept: { title: string; body: string }, misconception?: string) {
-  if (!hasApiKey()) {
-    return {
-      question: `In your own words: what is "${concept.title}", and why does it matter?`,
-      idealAnswer: concept.body,
-    };
-  }
-  return generateJSON<{ question: string; idealAnswer: string }>(
+  const offline = () => ({
+    question: `In your own words: what is "${concept.title}", and why does it matter?`,
+    idealAnswer: concept.body,
+  });
+  return live(() => generateJSON<{ question: string; idealAnswer: string }>(
     {
       type: "text",
       text: `Write ONE free-response question testing real understanding of this concept — not recall of its wording.
@@ -453,7 +569,7 @@ Keep it to one or two sentences. Also give the ideal answer.`,
     },
     QUESTION_SCHEMA,
     { question: `Explain ${concept.title} in your own words.`, idealAnswer: concept.body },
-  );
+  ), offline);
 }
 
 const GRADE_SCHEMA = {
@@ -472,18 +588,15 @@ export async function gradeAnswer(
   question: string,
   answer: string,
 ) {
-  if (!hasApiKey()) {
-    // Length-based stand-in: enough to exercise the mastery writeback offline.
-    const score = Math.min(1, answer.trim().split(/\s+/).length / 35);
-    return {
-      score,
-      feedback: "[offline] Set GEMINI_API_KEY for real grading. Mastery still updated so you can see the graph recolour.",
-      missedPoints: [] as string[],
-      misconception: undefined as string | undefined,
-    };
-  }
+  // Length-based stand-in: enough to exercise the mastery writeback offline.
+  const offline = () => ({
+    score: Math.min(1, answer.trim().split(/\s+/).length / 35),
+    feedback: "[offline] Real grading needs a working Gemini key. Mastery still updated so you can see the graph recolour.",
+    missedPoints: [] as string[],
+    misconception: undefined as string | undefined,
+  });
 
-  return generateJSON<{ score: number; feedback: string; missedPoints: string[]; misconception?: string }>(
+  return live(() => generateJSON<{ score: number; feedback: string; missedPoints: string[]; misconception?: string }>(
     {
       type: "text",
       text: `Grade this answer against the concept. Be fair but honest — inflated scores make the spaced-repetition scheduling useless.
@@ -499,5 +612,5 @@ missedPoints: what they left out. misconception: if their answer reveals a speci
     },
     GRADE_SCHEMA,
     { score: 0.5, feedback: "Could not grade.", missedPoints: [] },
-  );
+  ), offline);
 }

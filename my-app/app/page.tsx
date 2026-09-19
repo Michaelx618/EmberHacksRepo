@@ -34,6 +34,7 @@ export default function Page() {
   const [layout, setLayout] = useState<Layout>("web");
   const [refreshKey, setRefreshKey] = useState(0);
   const [teachTarget, setTeachTarget] = useState<ConceptDetail | null>(null);
+  const [teachKey, setTeachKey] = useState(0);
   const [banner, setBanner] = useState<IngestSummary | null>(null);
 
   // Bumping refreshKey reloads the graph -- that's how mastery changes from
@@ -241,12 +242,16 @@ export default function Page() {
               conceptId={selectedId}
               refreshKey={refreshKey}
               onNavigate={(id) => setSelectedId(id)}
-              onTeach={(c) => setTeachTarget(c)}
+              onTeach={(c) => {
+                setTeachTarget(c);
+                setTeachKey((k) => k + 1);
+              }}
               onRefresh={() => setRefreshKey((k) => k + 1)}
             />
           </div>
           <TutorChat
             target={teachTarget}
+            teachKey={teachKey}
             onMasteryChange={() => setRefreshKey((k) => k + 1)}
           />
         </aside>
@@ -259,18 +264,22 @@ export default function Page() {
 
 function Legend() {
   return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap gap-x-2 gap-y-1">
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
         {Object.entries(KIND_GLYPH).map(([kind, glyph]) => (
-          <span key={kind} className="whitespace-nowrap">
-            <span className="text-foreground">{glyph}</span> {kind}
+          <span key={kind} className="flex items-center gap-1.5 whitespace-nowrap">
+            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-panel-raised border border-border text-[10px] text-foreground/90">
+              {glyph}
+            </span>
+            <span>{kind}</span>
           </span>
         ))}
       </div>
-      <div className="flex flex-wrap gap-x-2 gap-y-1 pt-1.5 border-t border-border">
+      <div className="flex flex-wrap gap-x-2.5 gap-y-1 pt-1.5 border-t border-border">
         {Object.entries(RELATION_LABEL).map(([rel, label]) => (
-          <span key={rel} className="whitespace-nowrap">
-            <span style={{ color: RELATION_COLOR[rel] }}>—</span> {label}
+          <span key={rel} className="whitespace-nowrap inline-flex items-center gap-1">
+            <span className="inline-block w-2.5 h-px" style={{ background: RELATION_COLOR[rel] }} />
+            {label}
           </span>
         ))}
       </div>

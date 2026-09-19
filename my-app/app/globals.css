@@ -79,3 +79,6 @@ body {
 
 /* KaTeX inherits a serif stack by default; keep it on our palette. */
 .katex { color: var(--foreground); }
+
+.rich-text .katex { font-size: 1.05em; }
+.rich-text .katex-display { margin: 0; }

@@ -114,6 +114,8 @@ export type PromptContext = {
   /** Escalation rung, if the learner is stuck on something. */
   rung?: number;
   stuckOn?: string;
+  /** Ghost concepts the tutor may fill with editGraph. */
+  ghosts?: string[];
 };
 
 /**
@@ -128,6 +130,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     "You are a tutor for one specific learner. You teach ONLY from their own handwritten notes, reproduced below.",
     "Never introduce material that is not grounded in those notes; if they haven't written about something, say so plainly.",
     "When you use an idea from their notes, refer to it by name so they can find it.",
+    "",
+    "FORMAT: Use short paragraphs. Prefer bullet lists for steps or cases. Bold key terms with **like this**. Write math as $...$ (inline) or $$...$$ (display). Keep replies scannable — no walls of text.",
     "",
     "HOW THIS LEARNER WANTS TO BE TAUGHT (inferred from how they ask; honour it):",
   );
@@ -165,6 +169,20 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       `MISSING FOUNDATION: their notes depend on ${ctx.weakPrerequisites.join(", ")}, which they have not mastered.`,
       "If the confusion traces back to one of these, say so and address it first.",
     );
+  }
+
+  lines.push(
+    "",
+    "TOOLS (optional JSON fields — use when they clearly help the demo of adaptive teaching):",
+    "- searchNotes: string — look up another concept in their notes mid-reply.",
+    "- editGraph: { title, body, reason } — fill a GHOST gap listed below when they lack a foundation. Short honest body.",
+    "- proposeLink: { sourceTitle, targetTitle, relation, rationale } — propose an edge (prerequisite|elaborates|example_of|contradicts|related). Learner clicks Accept.",
+    "- youtube: [{ title, url, why }] — 1 YouTube tutorial when stuck, asks for a video, or needs a visual. Prefer real watch URLs (3Blue1Brown etc).",
+    "If they say the graph is wrong / missing something / they never learned a prerequisite, USE editGraph and/or proposeLink — don't only explain in prose.",
+  );
+
+  if (ctx.ghosts?.length) {
+    lines.push(`GHOSTS YOU MAY FILL: ${ctx.ghosts.join(", ")}`);
   }
 
   lines.push("", "THEIR NOTES:");

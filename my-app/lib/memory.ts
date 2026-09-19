@@ -183,7 +183,7 @@ export async function consolidate(
     });
   }
 
-  const edgesCreated = await linkConcepts(touched);
+  const edgesCreated = await linkConcepts(touched, { cohort: true });
   return { outcomes, edgesCreated };
 }
 
@@ -209,8 +209,19 @@ async function createConcept(noteId: string, c: ExtractedConcept, vector: number
   return created;
 }
 
-/** Link the given concepts to their nearest neighbours, one batched call. */
-export async function linkConcepts(conceptIds: string[]): Promise<number> {
+/**
+ * Link the given concepts to their nearest neighbours, one batched call.
+ *
+ * When `cohort` is set, every pair *within* conceptIds is also a candidate
+ * regardless of cosine. Concepts extracted from one page were written together
+ * in one derivation, which is a stronger prior than any embedding distance --
+ * and without it a note whose concepts happen to embed far apart lands in the
+ * graph as a row of disconnected islands.
+ */
+export async function linkConcepts(
+  conceptIds: string[],
+  { cohort = false }: { cohort?: boolean } = {},
+): Promise<number> {
   if (conceptIds.length === 0) return 0;
 
   const all = await db.concept.findMany({
@@ -250,6 +261,27 @@ export async function linkConcepts(conceptIds: string[]): Promise<number> {
     }
   }
 
+  if (cohort) {
+    for (let i = 0; i < conceptIds.length; i++) {
+      for (let j = i + 1; j < conceptIds.length; j++) {
+        const a = byId.get(conceptIds[i]);
+        const b = byId.get(conceptIds[j]);
+        if (!a || !b) continue;
+        const key = [a.id, b.id].sort().join("|");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pairs.push({
+          sourceTitle: a.title,
+          sourceBody: a.body,
+          targetTitle: b.title,
+          targetBody: b.body,
+          similarity: cosine(parseEmbedding(a.embedding), parseEmbedding(b.embedding)),
+        });
+        meta.push({ sourceId: a.id, targetId: b.id });
+      }
+    }
+  }
+
   if (pairs.length === 0) return 0;
 
   const classified = await classifyRelations(pairs);
@@ -258,6 +290,7 @@ export async function linkConcepts(conceptIds: string[]): Promise<number> {
   for (const rel of classified) {
     const m = meta[rel.index];
     if (!m) continue;
+    if (rel.relation === "none") continue;
     await db.edge.upsert({
       where: {
         sourceId_targetId_relation: {
