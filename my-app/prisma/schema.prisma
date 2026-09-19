@@ -1,0 +1,104 @@
+// Concept graph memory. One layer: Concepts are the memory, Notes are
+// provenance, Edges are its structure.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Note {
+  id         String   @id @default(cuid())
+  title      String
+  sourceType String // image | pdf | text
+  fileName   String?
+  imagePath  String? // for handwriting crops + inspector preview
+  markdown   String
+  createdAt  DateTime @default(now())
+
+  sources ConceptSource[]
+}
+
+// THE memory. One row = one atomic idea.
+model Concept {
+  id      String  @id @default(cuid())
+  title   String
+  summary String // one line, hover card
+  body    String // the teachable explanation
+  kind    String  @default("fact") // definition|formula|theorem|example|process|fact
+  latex   String? // set when kind == "formula" -> node face
+  tags    String  @default("[]") // JSON string[]
+
+  embedding String // JSON number[768]
+
+  mastery        Float     @default(0)
+  encounterCount Int       @default(1) // times seen across notes
+  reviewCount    Int       @default(0) // times quizzed
+  lastReviewedAt DateTime?
+
+  status      String   @default("active") // active | superseded | ghost
+  sourcesJson String? // JSON [{url,title}] from research
+  createdAt   DateTime @default(now())
+
+  sources   ConceptSource[]
+  revisions ConceptRevision[]
+
+  @@index([status])
+}
+
+// Many notes can evidence one concept -- this is what makes re-reading a
+// topic STRENGTHEN a node instead of duplicating it.
+model ConceptSource {
+  id        String  @id @default(cuid())
+  conceptId String
+  noteId    String
+  quote     String?
+  bbox      String? // JSON [x0,y0,x1,y1] normalized 0-1000
+
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  note    Note    @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@unique([conceptId, noteId])
+  @@index([noteId])
+}
+
+model ConceptRevision {
+  id        String   @id @default(cuid())
+  conceptId String
+  body      String // the PREVIOUS body
+  reason    String
+  createdAt DateTime @default(now())
+
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@index([conceptId])
+}
+
+model Edge {
+  id        String  @id @default(cuid())
+  sourceId  String
+  targetId  String
+  relation  String // prerequisite|elaborates|example_of|contradicts|related
+  strength  Float   @default(0.5)
+  rationale String  @default("")
+  resolved  Boolean @default(false)
+
+  @@unique([sourceId, targetId, relation])
+  @@index([sourceId])
+  @@index([targetId])
+}
+
+// Deliberately minimal: one row, JSON blobs.
+model LearnerProfile {
+  id        String   @id @default("me")
+  style     String   @default("{}") // 6 dims, 0..1
+  confusion String   @default("[]") // [{conceptId, evidence, rung, at}]
+  // What we were last talking about. "I still don't get it" carries no
+  // retrievable content, so without this the tutor escalates on whatever
+  // the embedding happens to match instead of the actual topic.
+  lastConceptId String?
+  turnCount Int      @default(0)
+  updatedAt DateTime @updatedAt
+}

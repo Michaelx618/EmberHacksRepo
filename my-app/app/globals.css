@@ -1,26 +1,81 @@
 @import "tailwindcss";
 
+/* Dark-first: a knowledge graph reads far better on a dark canvas. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0b0d12;
+  --foreground: #e6e8ee;
+
+  --panel: #11141c;
+  --panel-raised: #171b25;
+  --border: #222836;
+  --border-strong: #2e3647;
+  --muted: #8b93a7;
+  --accent: #7c9cff;
+  --accent-dim: #2b3550;
+
+  /* relation colours -- also used by the canvas renderer */
+  --rel-prerequisite: #5b8def;
+  --rel-elaborates: #8b93a7;
+  --rel-example_of: #34d399;
+  --rel-contradicts: #f04a5e;
+  --rel-related: #3a4152;
+
+  /* mastery ramp */
+  --mastery-cold: #6b7280;
+  --mastery-mid: #f59e0b;
+  --mastery-hot: #10b981;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-prerequisite: var(--rel-prerequisite);
+  --color-elaborates: var(--rel-elaborates);
+  --color-example: var(--rel-example_of);
+  --color-contradicts: var(--rel-contradicts);
+  --color-related: var(--rel-related);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  overscroll-behavior: none;
 }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 3px solid var(--background);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+@keyframes dash-flow { to { stroke-dashoffset: -16; } }
+
+.pulse-ring {
+  animation: pulse-ring 2s ease-out infinite;
+}
+@keyframes pulse-ring {
+  0%   { opacity: 0.55; transform: scale(1); }
+  70%  { opacity: 0;    transform: scale(1.7); }
+  100% { opacity: 0;    transform: scale(1.7); }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up 0.18s ease-out; }
+
+/* KaTeX inherits a serif stack by default; keep it on our palette. */
+.katex { color: var(--foreground); }

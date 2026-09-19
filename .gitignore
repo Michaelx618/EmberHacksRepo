@@ -1,4 +1,15 @@
-# Environment files
+# Environment files — never commit credentials
 .env
 .env.*
 .env.local
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Local databases
+*.db
+*.db-journal
+
+# OS
+.DS_Store
