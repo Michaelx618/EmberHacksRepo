@@ -6,6 +6,7 @@ import type { GraphLink, GraphNode } from "@/app/api/graph/route";
 import CommandPalette from "@/components/CommandPalette";
 import ConceptInspector, { type ConceptDetail } from "@/components/ConceptInspector";
 import FlashcardsView from "@/components/FlashcardsView";
+import LiveCapture from "@/components/LiveCapture";
 import NoteUploader, { type IngestSummary } from "@/components/NoteUploader";
 import TutorChat from "@/components/TutorChat";
 import { RenameDialog, DeleteDialog } from "@/components/NoteDialog";
@@ -158,6 +159,23 @@ export default function Page() {
           <NoteUploader
             onIngested={(s) => {
               setBanner(s);
+              setRefreshKey((k) => k + 1);
+            }}
+          />
+          <LiveCapture
+            onSessionStart={(n) => {
+              // Focus the new note straight away, so the graph is already
+              // showing the (empty) page the camera is about to fill.
+              setBanner(null);
+              setFocusNoteId(n.id);
+              setRootId(null);
+              setTrail([]);
+              setView("graph");
+              setRefreshKey((k) => k + 1);
+            }}
+            onGraphChanged={() => setRefreshKey((k) => k + 1)}
+            onSessionEnd={(n, { deleted }) => {
+              if (deleted && focusNoteId === n.id) setFocusNoteId(null);
               setRefreshKey((k) => k + 1);
             }}
           />

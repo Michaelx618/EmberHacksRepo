@@ -71,6 +71,13 @@ body {
   100% { opacity: 0;    transform: scale(1.7); }
 }
 
+/* Live capture: the viewfinder border breathes while a still is being read. */
+.scan-pulse { animation: scan-pulse 1.4s ease-in-out infinite; }
+@keyframes scan-pulse {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 1; }
+}
+
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }

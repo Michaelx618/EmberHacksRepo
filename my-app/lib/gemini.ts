@@ -459,6 +459,77 @@ export async function extractFromFile(
   );
 }
 
+/**
+ * Live capture: a page the student holds up to the camera, re-photographed
+ * every few seconds.
+ *
+ * Read the page like the uploader does -- everything on it, in one go. The one
+ * thing this has to handle that the uploader doesn't is repetition: the same
+ * page stays in frame for many seconds, so we name what we already hold and
+ * let the model return nothing when the page has not changed. That list is a
+ * cost optimisation, NOT a filter on what counts as worth capturing -- when the
+ * page shows something the list doesn't cover, it gets reported.
+ */
+const LIVE_PROMPT = `A student is holding a page of their notes up to a camera.
+
+Read the WHOLE page and extract every idea written on it. They finished writing
+before showing it to you and are holding it up precisely so it lands in their
+notes, so completeness is what matters: capture everything, and do not hold
+anything back on the theory that a later frame will show it again.
+
+Frames arrive every few seconds and usually show the same page repeatedly, so a
+list of what has already been captured from this page follows. Use it only to
+avoid doing the same work twice: skip an idea when it is genuinely already in
+that list, and return an empty concepts array when the page has not changed at
+all. Anything the list does not already cover, report — including ideas that
+sit close to something already captured.
+
+Reading a page through a camera, rather than from a file:
+- A hand, pen, shadow or glare may cover part of the page, and the shot may be
+  skewed, angled or soft. Read through all of that as best you can.
+- Where a word is genuinely illegible or physically covered, write [?] rather
+  than guessing. A plausible invention is far worse than a visible gap.
+
+For each idea on the page give:
+  - title: the canonical name of the idea, not a sentence
+  - summary: one line, under 90 characters
+  - body: a teachable explanation in your own words, grounded strictly in what
+    they wrote. If their note is wrong, preserve the claim as written —
+    contradictions get caught later, and silently fixing it here hides the
+    mistake from them.
+  - kind: definition | formula | theorem | example | process | fact
+  - latex: the central equation, when kind is "formula"
+  - tags: two or three subject tags
+  - quote: the short phrase from the page this came from
+
+Split compound ideas apart; skip administrative scribble (dates, page numbers,
+"see p.42"). A full page usually yields 4-10 concepts.
+
+Also return:
+  - title: what this page is about overall, as a short heading
+  - markdown: a clean transcription of the ENTIRE page, every line of it, with
+    equations as LaTeX — not only the parts that are new.`;
+
+/** Read a whole page from one camera frame, skipping what this note already holds. */
+export async function extractLiveFrame(
+  base64: string,
+  known: string[],
+  mimeType = "image/jpeg",
+): Promise<ExtractedNote> {
+  const alreadyCaptured = known.length
+    ? `\n\nALREADY CAPTURED from this page — no need to report these again:\n${known.map((t) => `- ${t}`).join("\n")}`
+    : "\n\nNothing has been captured from this page yet, so everything on it is new.";
+
+  return generateJSON<ExtractedNote>(
+    [
+      { type: "image", data: base64, mime_type: mimeType },
+      { type: "text", text: LIVE_PROMPT + alreadyCaptured },
+    ],
+    EXTRACT_SCHEMA,
+    { title: "", markdown: "", concepts: [] },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Research: Google Search grounding
 // ---------------------------------------------------------------------------
