@@ -5,7 +5,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { hashEmbed } from "./vector";
 
-export const MODEL = "gemini-3.8-flash";
+export const MODEL = "gemini-3.6-flash";
 export const EMBED_MODEL = "gemini-embedding-2";
 export const EMBED_DIM = 768;
 
@@ -70,31 +70,52 @@ export async function generateText(input: unknown, system?: string): Promise<str
 
 /** Batch embeddings. Offline: deterministic per-text vectors so dedup still
  *  behaves sensibly against the fixture graph. */
+/** Embed a single text with exponential backoff on 429. */
+async function embedOne_(text: string): Promise<number[]> {
+  const RETRIES = 4;
+  for (let attempt = 0; attempt < RETRIES; attempt++) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": process.env.GEMINI_API_KEY!,
+        },
+        body: JSON.stringify({
+          model: `models/${EMBED_MODEL}`,
+          content: { parts: [{ text }] },
+        }),
+      },
+    );
+    if (res.status === 429) {
+      // Exponential backoff: 2s, 4s, 8s, 16s
+      const delay = 2000 * Math.pow(2, attempt);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+    if (!res.ok) throw new Error(`embed failed ${res.status}: ${await res.text()}`);
+    const data = (await res.json()) as { embedding?: { values: number[] } };
+    return (data.embedding?.values ?? []).slice(0, EMBED_DIM);
+  }
+  throw new Error("embed failed: max retries exceeded (429 rate limit)");
+}
+
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
   if (!hasApiKey()) return texts.map((t) => hashEmbed(t, EMBED_DIM));
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:batchEmbedContents`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": process.env.GEMINI_API_KEY!,
-      },
-      body: JSON.stringify({
-        requests: texts.map((text) => ({
-          model: `models/${EMBED_MODEL}`,
-          content: { parts: [{ text }] },
-          output_dimensionality: EMBED_DIM,
-        })),
-      }),
-    },
-  );
-
-  if (!res.ok) throw new Error(`embed failed ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { embeddings?: { values: number[] }[] };
-  return (data.embeddings ?? []).map((e) => e.values);
+  // Process in chunks of 3 to stay within rate limits, with backoff on each.
+  const CHUNK = 3;
+  const results: number[][] = [];
+  for (let i = 0; i < texts.length; i += CHUNK) {
+    const chunk = texts.slice(i, i + CHUNK);
+    const chunkResults = await Promise.all(chunk.map(embedOne_));
+    results.push(...chunkResults);
+    // Small pause between chunks to avoid bursting the quota
+    if (i + CHUNK < texts.length) await new Promise((r) => setTimeout(r, 500));
+  }
+  return results;
 }
 
 export async function embedOne(text: string): Promise<number[]> {
