@@ -1,12 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GraphLink, GraphNode } from "@/app/api/graph/route";
 import CommandPalette from "@/components/CommandPalette";
 import ConceptInspector, { type ConceptDetail } from "@/components/ConceptInspector";
+import FlashcardsView from "@/components/FlashcardsView";
+import LiveCapture from "@/components/LiveCapture";
 import NoteUploader, { type IngestSummary } from "@/components/NoteUploader";
 import TutorChat from "@/components/TutorChat";
+import { RenameDialog, DeleteDialog } from "@/components/NoteDialog";
 import type { Layout } from "@/components/GraphView";
 import { KIND_GLYPH, RELATION_COLOR, RELATION_LABEL } from "@/lib/graph-style";
 
@@ -28,13 +31,30 @@ export default function Page() {
   const [data, setData] = useState<GraphPayload | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rootId, setRootId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [focusNoteId, setFocusNoteId] = useState<string | null>(null);
   const [trail, setTrail] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [layout, setLayout] = useState<Layout>("web");
+  const [view, setView] = useState<"graph" | "quiz">("graph");
   const [refreshKey, setRefreshKey] = useState(0);
   const [teachTarget, setTeachTarget] = useState<ConceptDetail | null>(null);
+  const [teachKey, setTeachKey] = useState(0);
   const [banner, setBanner] = useState<IngestSummary | null>(null);
+  const [renameTarget, setRenameTarget] = useState<Note | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Note | null>(null);
+
+  // Close note menu when clicking outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   // Bumping refreshKey reloads the graph -- that's how mastery changes from
   // the quiz make it back onto the canvas.
@@ -110,12 +130,25 @@ export default function Page() {
             {(["web", "path"] as Layout[]).map((l) => (
               <button
                 key={l}
-                onClick={() => setLayout(l)}
-                className={`px-2.5 py-1 transition ${layout === l ? "bg-panel-raised text-foreground" : "text-muted hover:text-foreground"}`}
+                onClick={() => {
+                  setLayout(l);
+                  setView("graph");
+                }}
+                className={`px-2.5 py-1 transition ${
+                  view === "graph" && layout === l ? "bg-panel-raised text-foreground" : "text-muted hover:text-foreground"
+                }`}
               >
                 {l === "web" ? "Web" : "Study path"}
               </button>
             ))}
+            <button
+              onClick={() => setView("quiz")}
+              className={`px-2.5 py-1 transition ${
+                view === "quiz" ? "bg-panel-raised text-foreground" : "text-muted hover:text-foreground"
+              }`}
+            >
+              Quiz
+            </button>
           </div>
         </div>
       </header>
@@ -129,23 +162,92 @@ export default function Page() {
               setRefreshKey((k) => k + 1);
             }}
           />
+          <LiveCapture
+            onSessionStart={(n) => {
+              // Focus the new note straight away, so the graph is already
+              // showing the (empty) page the camera is about to fill.
+              setBanner(null);
+              setFocusNoteId(n.id);
+              setRootId(null);
+              setTrail([]);
+              setView("graph");
+              setRefreshKey((k) => k + 1);
+            }}
+            onGraphChanged={() => setRefreshKey((k) => k + 1)}
+            onSessionEnd={(n, { deleted }) => {
+              if (deleted && focusNoteId === n.id) setFocusNoteId(null);
+              setRefreshKey((k) => k + 1);
+            }}
+          />
           <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-muted">Notes</div>
-          <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
+          <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5" ref={menuRef}>
             {(data?.notes ?? []).map((n) => (
-              <button
-                key={n.id}
-                onClick={() => {
-                  setFocusNoteId((cur) => (cur === n.id ? null : n.id));
-                  setRootId(null);
-                  setTrail([]);
-                }}
-                className={`w-full text-left px-2 py-1.5 rounded-md text-xs transition ${
-                  focusNoteId === n.id ? "bg-accent-dim text-accent" : "hover:bg-panel-raised text-muted hover:text-foreground"
-                }`}
-              >
-                <span className="block truncate">{n.title}</span>
-                <span className="block text-[10px] opacity-60">{n.sourceType}</span>
-              </button>
+              <div key={n.id} className="relative group">
+                <button
+                  onClick={() => {
+                    setFocusNoteId((cur) => (cur === n.id ? null : n.id));
+                    setRootId(null);
+                    setTrail([]);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 pr-7 rounded-md text-xs transition ${
+                    focusNoteId === n.id ? "bg-accent-dim text-accent" : "hover:bg-panel-raised text-muted hover:text-foreground"
+                  }`}
+                >
+                  <span className="block truncate">{n.title}</span>
+                  <span className="block text-[10px] opacity-60">{n.sourceType}</span>
+                </button>
+
+                {/* Three-dot menu button */}
+                <button
+                  id={`note-menu-btn-${n.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenMenuId((cur) => (cur === n.id ? null : n.id));
+                  }}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition text-muted hover:text-foreground hover:bg-panel-raised"
+                  aria-label="Note options"
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                    <circle cx="6" cy="2" r="1.2"/>
+                    <circle cx="6" cy="6" r="1.2"/>
+                    <circle cx="6" cy="10" r="1.2"/>
+                  </svg>
+                </button>
+
+                {/* Dropdown menu */}
+                {openMenuId === n.id && (
+                  <div className="absolute right-0 top-full mt-1 z-50 w-36 rounded-lg border border-border-strong bg-panel shadow-lg overflow-hidden">
+                    <button
+                      id={`note-rename-${n.id}`}
+                      className="w-full text-left px-3 py-2 text-xs hover:bg-panel-raised transition flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(null);
+                        setRenameTarget(n);
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M8.5 1.5a1.414 1.414 0 0 1 2 2L4 10H1.5V7.5L8.5 1.5z"/>
+                      </svg>
+                      Rename
+                    </button>
+                    <button
+                      id={`note-delete-${n.id}`}
+                      className="w-full text-left px-3 py-2 text-xs text-contradicts hover:bg-contradicts/10 transition flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(null);
+                        setDeleteTarget(n);
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M1.5 3h9M4.5 3V1.5h3V3M10 3l-.75 7.5h-6.5L2 3"/>
+                      </svg>
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
           <div className="px-3 py-2 border-t border-border text-[10px] text-muted leading-relaxed">
@@ -153,9 +255,9 @@ export default function Page() {
           </div>
         </aside>
 
-        {/* Center: the graph */}
+        {/* Center: the graph, or the flashcards page */}
         <main className="flex-1 min-w-0 relative">
-          {(trail.length > 0 || focusNoteId) && (
+          {view === "graph" && (trail.length > 0 || focusNoteId) && (
             <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5 text-[11px] fade-up">
               <button onClick={resetView} className="px-2 py-1 rounded-md bg-panel border border-border hover:border-border-strong transition">
                 Whole graph
@@ -216,7 +318,14 @@ export default function Page() {
             </div>
           )}
 
-          {data ? (
+          {data && view === "quiz" ? (
+            <FlashcardsView
+              nodes={data.nodes}
+              links={data.links}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+            />
+          ) : data ? (
             <GraphView
               nodes={data.nodes}
               links={data.links}
@@ -241,36 +350,73 @@ export default function Page() {
               conceptId={selectedId}
               refreshKey={refreshKey}
               onNavigate={(id) => setSelectedId(id)}
-              onTeach={(c) => setTeachTarget(c)}
+              onTeach={(c) => {
+                setTeachTarget(c);
+                setTeachKey((k) => k + 1);
+              }}
               onRefresh={() => setRefreshKey((k) => k + 1)}
             />
           </div>
           <TutorChat
             target={teachTarget}
+            teachKey={teachKey}
             onMasteryChange={() => setRefreshKey((k) => k + 1)}
           />
         </aside>
       </div>
 
       {data && <CommandPalette nodes={data.nodes} onPick={(id) => setSelectedId(id)} />}
+
+      {/* Note dialogs */}
+      {renameTarget && (
+        <RenameDialog
+          initialTitle={renameTarget.title}
+          onConfirm={async (newTitle) => {
+            await fetch(`/api/notes/${renameTarget.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ title: newTitle }),
+            });
+            setRenameTarget(null);
+            setRefreshKey((k) => k + 1);
+          }}
+          onCancel={() => setRenameTarget(null)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteDialog
+          noteTitle={deleteTarget.title}
+          onConfirm={async () => {
+            await fetch(`/api/notes/${deleteTarget.id}`, { method: "DELETE" });
+            if (focusNoteId === deleteTarget.id) setFocusNoteId(null);
+            setDeleteTarget(null);
+            setRefreshKey((k) => k + 1);
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }
 
 function Legend() {
   return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap gap-x-2 gap-y-1">
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
         {Object.entries(KIND_GLYPH).map(([kind, glyph]) => (
-          <span key={kind} className="whitespace-nowrap">
-            <span className="text-foreground">{glyph}</span> {kind}
+          <span key={kind} className="flex items-center gap-1.5 whitespace-nowrap">
+            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-panel-raised border border-border text-[10px] text-foreground/90">
+              {glyph}
+            </span>
+            <span>{kind}</span>
           </span>
         ))}
       </div>
-      <div className="flex flex-wrap gap-x-2 gap-y-1 pt-1.5 border-t border-border">
+      <div className="flex flex-wrap gap-x-2.5 gap-y-1 pt-1.5 border-t border-border">
         {Object.entries(RELATION_LABEL).map(([rel, label]) => (
-          <span key={rel} className="whitespace-nowrap">
-            <span style={{ color: RELATION_COLOR[rel] }}>—</span> {label}
+          <span key={rel} className="whitespace-nowrap inline-flex items-center gap-1">
+            <span className="inline-block w-2.5 h-px" style={{ background: RELATION_COLOR[rel] }} />
+            {label}
           </span>
         ))}
       </div>

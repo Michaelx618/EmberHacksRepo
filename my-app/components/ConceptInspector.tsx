@@ -5,6 +5,7 @@ import { KIND_LABEL, RELATION_COLOR, RELATION_LABEL } from "@/lib/graph-style";
 import { masteryColor } from "@/lib/memory-math";
 import Latex from "./Latex";
 import ResearchPanel from "./ResearchPanel";
+import RichText from "./RichText";
 
 type Related = {
   id: string; title: string; kind: string; status: string;
@@ -120,7 +121,7 @@ export default function ConceptInspector({
           knowledge graph — research it to fill it in.
         </p>
       ) : (
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{detail.body}</p>
+        <RichText text={detail.body} className="text-sm text-foreground/90" />
       )}
 
       <div className="flex gap-2 flex-wrap">

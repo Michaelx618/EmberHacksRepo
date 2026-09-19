@@ -3,12 +3,12 @@
 import { masteryColor } from "./memory-math";
 
 export const KIND_GLYPH: Record<string, string> = {
-  definition: "≡", // identical to
-  formula: "ƒ", // f
-  theorem: "⊢", // turnstile
-  example: "◆", // diamond
-  process: "⟳", // cycle
-  fact: "▪", // square
+  definition: "≔", // defined as
+  formula: "ƒ",
+  theorem: "⊢",
+  example: "◆",
+  process: "⟳",
+  fact: "▪",
 };
 
 export const KIND_LABEL: Record<string, string> = {

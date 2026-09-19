@@ -12,7 +12,8 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.mts",
     "check": "tsc --noEmit && eslint",
-    "smoke": "tsx scripts/smoke.mts"
+    "smoke": "tsx scripts/smoke.mts",
+    "check:latex": "tsx scripts/check-latex.mts"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",

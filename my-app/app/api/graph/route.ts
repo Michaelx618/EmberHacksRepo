@@ -8,6 +8,7 @@ export type GraphNode = {
   id: string;
   title: string;
   summary: string;
+  body: string;
   kind: string;
   latex: string | null;
   status: string;
@@ -33,7 +34,7 @@ export async function GET() {
   const [concepts, edges, notes] = await Promise.all([
     db.concept.findMany({
       select: {
-        id: true, title: true, summary: true, kind: true, latex: true, status: true,
+        id: true, title: true, summary: true, body: true, kind: true, latex: true, status: true,
         mastery: true, encounterCount: true, reviewCount: true, lastReviewedAt: true,
         sources: { select: { noteId: true } },
       },
@@ -66,6 +67,7 @@ export async function GET() {
     id: c.id,
     title: c.title,
     summary: c.summary,
+    body: c.body,
     kind: c.kind,
     latex: c.latex,
     status: c.status,

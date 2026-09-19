@@ -216,6 +216,10 @@ export default function GraphView({
     if (fittedFor.current === viewKey) return;
     fittedFor.current = viewKey;
     fitView();
+    // The first fit can run while nodes are still drifting, which strands
+    // high-degree nodes outside the frame. A second pass once things settle
+    // costs nothing and reliably brings them in.
+    setTimeout(fitView, 600);
   }, [viewKey, fitView]);
 
   const centerOn = useCallback((id: string) => {
@@ -284,32 +288,66 @@ export default function GraphView({
       const isGhost = node.status === "ghost";
       const dimmed = focusSet ? !focusSet.has(node.id) : false;
       const isSelected = node.id === selectedId;
+      const fill = nodeFill(node.status, node.retrievability);
 
       ctx.save();
-      ctx.globalAlpha = dimmed ? 0.15 : 1;
+      ctx.globalAlpha = dimmed ? 0.18 : 1;
 
-      // fill: retrievability
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      if (!isGhost) {
-        ctx.fillStyle = nodeFill(node.status, node.retrievability);
+      // Soft depth under the node (canvas has no CSS shadow).
+      if (!isGhost && !dimmed) {
+        ctx.beginPath();
+        ctx.arc(x, y + r * 0.12, r * 1.05, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
         ctx.fill();
       }
 
+      // Selection halo
+      if (isSelected) {
+        ctx.beginPath();
+        ctx.arc(x, y, r + 4.5 / globalScale, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(124,156,255,0.18)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, y, r + 3 / globalScale, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(124,156,255,0.55)";
+        ctx.lineWidth = 1.5 / globalScale;
+        ctx.stroke();
+      }
+
+      // Body
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      if (!isGhost) {
+        ctx.fillStyle = fill;
+        ctx.fill();
+
+        // Subtle top highlight so flat discs read as chips, not stickers.
+        ctx.beginPath();
+        ctx.arc(x, y - r * 0.28, r * 0.72, Math.PI * 1.15, Math.PI * 1.85);
+        ctx.strokeStyle = "rgba(255,255,255,0.22)";
+        ctx.lineWidth = Math.max(1.2, r * 0.18);
+        ctx.lineCap = "round";
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      }
+
       if (lod !== "far" || isSelected) {
-        // ring: status
-        ctx.lineWidth = isSelected ? 2.4 / globalScale : 1.6 / globalScale;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.lineWidth = isSelected ? 2.2 / globalScale : 1.4 / globalScale;
         if (node.hasContradiction) {
           ctx.strokeStyle = CONTRADICTION_COLOR;
           ctx.setLineDash([]);
         } else if (isGhost) {
           ctx.strokeStyle = GHOST_COLOR;
           ctx.setLineDash([3 / globalScale, 2.5 / globalScale]);
+          ctx.fillStyle = "rgba(75,83,102,0.12)";
+          ctx.fill();
         } else if (isSelected) {
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = "rgba(255,255,255,0.92)";
           ctx.setLineDash([]);
         } else {
-          ctx.strokeStyle = "rgba(255,255,255,0.22)";
+          ctx.strokeStyle = "rgba(255,255,255,0.16)";
           ctx.setLineDash([]);
         }
         ctx.stroke();
@@ -317,70 +355,100 @@ export default function GraphView({
       }
 
       if (lod !== "far" && !isGhost) {
-        // face: rendered LaTeX when available, otherwise the kind glyph
         const latexImg = node.kind === "formula" && node.latex ? getLatexImage(node.latex) : null;
         if (latexImg) {
-          const w = r * 1.85;
+          const w = r * 1.7;
           const h = (w * latexImg.height) / latexImg.width;
           ctx.save();
           ctx.beginPath();
-          ctx.arc(x, y, r * 0.95, 0, Math.PI * 2);
+          ctx.arc(x, y, r * 0.88, 0, Math.PI * 2);
           ctx.clip();
           ctx.drawImage(latexImg, x - w / 2, y - h / 2, w, h);
           ctx.restore();
         } else {
-          ctx.fillStyle = "rgba(10,12,18,0.85)";
-          ctx.font = `${r * 1.15}px ui-sans-serif, system-ui, sans-serif`;
+          // Light glyph on the mastery fill — dark ≡ read as a hamburger.
+          ctx.fillStyle = "rgba(255,255,255,0.92)";
+          ctx.font = `600 ${r * 1.05}px ui-sans-serif, system-ui, sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText(KIND_GLYPH[node.kind] ?? "▪", x, y + r * 0.04);
+          ctx.fillText(KIND_GLYPH[node.kind] ?? "▪", x, y + r * 0.05);
         }
       }
 
-      // badge: source count, only when it means something
+      // Source-count badge
       if (lod !== "far" && node.sourceCount >= 2) {
-        const bx = x + r * 0.78;
-        const by = y - r * 0.78;
-        const br = Math.max(2.6, r * 0.42);
+        const bx = x + r * 0.82;
+        const by = y - r * 0.82;
+        const br = Math.max(2.8, r * 0.4);
+        ctx.beginPath();
+        ctx.arc(bx, by, br + 0.8 / globalScale, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(11,13,18,0.85)";
+        ctx.fill();
         ctx.beginPath();
         ctx.arc(bx, by, br, 0, Math.PI * 2);
         ctx.fillStyle = "#7c9cff";
         ctx.fill();
         if (globalScale > 1.1) {
           ctx.fillStyle = "#07090e";
-          ctx.font = `bold ${br * 1.35}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.font = `700 ${br * 1.3}px ui-sans-serif, system-ui, sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText(String(node.sourceCount), bx, by + br * 0.06);
+          ctx.fillText(String(node.sourceCount), bx, by + br * 0.05);
         }
       }
 
-      // "+n" affordance for neighbours we're not showing
       const hidden = hiddenNeighbourCount(node.id);
       if (lod !== "far" && hidden > 0) {
-        ctx.fillStyle = "rgba(124,156,255,0.9)";
-        ctx.font = `${Math.max(3.4, r * 0.62)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillStyle = "rgba(124,156,255,0.85)";
+        ctx.font = `600 ${Math.max(3.2, r * 0.55)}px ui-sans-serif, system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillText(`+${hidden}`, x, y + r + 1.4 / globalScale);
+        ctx.fillText(`+${hidden}`, x, y + r + 1.2 / globalScale);
       }
 
       if (lod === "near") {
-        ctx.fillStyle = dimmed ? "rgba(230,232,238,0.35)" : "#e6e8ee";
-        ctx.font = `${Math.max(3, 11 / globalScale)}px ui-sans-serif, system-ui, sans-serif`;
+        // When something is focused, only label the neighbourhood — the rest
+        // of the canvas stays quiet instead of a title hairball.
+        if (focusSet && !focusSet.has(node.id) && !isSelected) {
+          ctx.restore();
+          return;
+        }
+
+        const label = truncate(node.title, isSelected ? 26 : 18);
+        const fontSize = Math.max(3.2, (isSelected ? 11 : 10) / globalScale);
+        ctx.font = `${isSelected ? "600" : "500"} ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+        const tw = ctx.measureText(label).width;
+        const padX = 3.2 / globalScale;
+        const padY = 1.8 / globalScale;
+        const offset = hidden > 0 ? r + 5.5 / globalScale : r + 2.2 / globalScale;
+        const ly = y + offset;
+
+        // Pill behind the label so edges don't cut through titles.
+        const pillW = tw + padX * 2;
+        const pillH = fontSize + padY * 2;
+        const radius = pillH / 2;
+        roundRect(ctx, x - pillW / 2, ly - padY * 0.2, pillW, pillH, radius);
+        ctx.fillStyle = dimmed ? "rgba(11,13,18,0.35)" : "rgba(11,13,18,0.78)";
+        ctx.fill();
+
+        ctx.fillStyle = dimmed ? "rgba(230,232,238,0.4)" : "#e6e8ee";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        const offset = hidden > 0 ? r + 6.5 / globalScale : r + 2.5 / globalScale;
-        ctx.fillText(truncate(node.title, 26), x, y + offset);
+        ctx.fillText(label, x, ly + padY * 0.35);
 
-        if (!isGhost) {
+        // Recall bar only on the focused node — otherwise the canvas gets noisy.
+        if (isSelected && !isGhost) {
           const w = r * 2;
-          const h = 1.6 / globalScale;
-          const by = y + offset + 12 / globalScale;
+          const h = 2 / globalScale;
+          const by = ly + pillH + 2.5 / globalScale;
+          roundRect(ctx, x - w / 2, by, w, h, h / 2);
           ctx.fillStyle = "rgba(255,255,255,0.12)";
-          ctx.fillRect(x - w / 2, by, w, h);
-          ctx.fillStyle = nodeFill(node.status, node.retrievability);
-          ctx.fillRect(x - w / 2, by, w * node.retrievability, h);
+          ctx.fill();
+          if (node.retrievability > 0) {
+            roundRect(ctx, x - w / 2, by, w * node.retrievability, h, h / 2);
+            ctx.fillStyle = fill;
+            ctx.fill();
+          }
         }
       }
 
@@ -491,6 +559,24 @@ function computeDepths(nodes: GraphNode[], links: GraphLink[]): Map<string, numb
 
 function truncate(s: string, n: number) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
 }
 
 function withAlpha(hex: string, alpha: number) {

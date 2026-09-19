@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { extractFromFile, hasApiKey } from "@/lib/gemini";
+import { degradedReason, extractFromFile, hasApiKey, noteIfUnavailable } from "@/lib/gemini";
 import { consolidate } from "@/lib/memory";
 
 export const dynamic = "force-dynamic";
@@ -17,9 +17,15 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Reading handwriting genuinely requires the model -- there is no offline
+  // stand-in for OCR, so this is the one route that hard-fails without it.
   if (!hasApiKey()) {
     return NextResponse.json(
-      { error: "GEMINI_API_KEY is not set. Add it to my-app/.env.local and restart the dev server." },
+      {
+        error:
+          degradedReason() ??
+          "GEMINI_API_KEY is not set. Add it to my-app/.env.local and restart the dev server.",
+      },
       { status: 503 },
     );
   }
@@ -48,9 +54,11 @@ export async function POST(request: Request) {
   try {
     extracted = await extractFromFile(base64, mimeType);
   } catch (e) {
+    noteIfUnavailable(e);
+    const reason = degradedReason();
     return NextResponse.json(
-      { error: e instanceof Error ? `Extraction failed: ${e.message}` : "Extraction failed" },
-      { status: 502 },
+      { error: reason ?? (e instanceof Error ? `Extraction failed: ${e.message}` : "Extraction failed") },
+      { status: reason ? 503 : 502 },
     );
   }
 

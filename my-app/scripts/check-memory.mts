@@ -1,5 +1,6 @@
 // Phase 2 verification. The critical one: re-reading a topic must STRENGTHEN
 // the concept you already have, not duplicate it.
+import "../lib/load-env";
 import { db } from "../lib/db";
 import { consolidate, retrieve, weakPrerequisitesFor, solidGround } from "../lib/memory";
 import { embedOne } from "../lib/gemini";

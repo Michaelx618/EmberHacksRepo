@@ -1,15 +1,14 @@
 // Fixture graph. Every visual state the renderer can draw is represented here,
 // so Phase 3 never debugs rendering and data at the same time.
 import { db } from "../lib/db";
+import "../lib/load-env";
+import { embedBatch } from "../lib/gemini";
 import { conceptEmbedText } from "../lib/memory";
-import { hashEmbed } from "../lib/vector";
 
-/** Embed exactly the way consolidate() does offline, so seeded concepts and
- *  live queries live in the same vector space. Topic clustering then comes
- *  from genuinely shared vocabulary rather than a synthetic base vector. */
-function embed(c: { title: string; summary: string; body: string }): number[] {
-  return hashEmbed(conceptEmbedText(c));
-}
+// Seeded concepts MUST be embedded by whatever embedder live queries will
+// use. Mixing the offline stub with real Gemini vectors puts them in
+// different spaces, and retrieval silently returns nothing -- the tutor then
+// insists your notes don't cover topics that are sitting right there.
 
 const DAY = 24 * 60 * 60 * 1000;
 const ago = (d: number) => new Date(Date.now() - d * DAY);
@@ -235,8 +234,18 @@ async function main() {
     noteIds.set(n.key, created.id);
   }
 
+  // One batched call for every concept, using the live embedder when a key
+  // is configured and the deterministic stub otherwise.
+  const { hasApiKey } = await import("../lib/gemini");
+  console.log(`Embedding ${CONCEPTS.length} concepts (live embedder: ${hasApiKey()})...`);
+  const vectors = await embedBatch(CONCEPTS.map(conceptEmbedText));
+  if (vectors.length !== CONCEPTS.length) {
+    throw new Error(`embedding count mismatch: ${vectors.length} vs ${CONCEPTS.length}`);
+  }
+
   const conceptIds = new Map<string, string>();
-  for (const c of CONCEPTS) {
+  for (let ci = 0; ci < CONCEPTS.length; ci++) {
+    const c = CONCEPTS[ci];
     const created = await db.concept.create({
       data: {
         title: c.title,
@@ -245,7 +254,7 @@ async function main() {
         kind: c.kind,
         latex: c.latex ?? null,
         tags: JSON.stringify(c.tags),
-        embedding: JSON.stringify(embed(c)),
+        embedding: JSON.stringify(vectors[ci]),
         mastery: c.mastery,
         encounterCount: Math.max(1, c.notes.length),
         reviewCount: c.reviewCount ?? 0,

@@ -3,7 +3,7 @@
 // in five routes at once.
 //
 //   npx tsx scripts/smoke.mts
-import "dotenv/config";
+import "../lib/load-env";
 import { embedBatch, generateJSON, generateText, hasApiKey, research } from "../lib/gemini";
 
 if (!hasApiKey()) {

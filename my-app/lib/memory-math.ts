@@ -6,8 +6,18 @@
  *    too high -> everything duplicates and reinforcement never fires */
 export const DEDUP_THRESHOLD = 0.88;
 
-/** Cosine above this is worth considering as a relation between concepts. */
-export const LINK_THRESHOLD = 0.72;
+/**
+ * Recall floor for relation candidates -- deliberately permissive.
+ *
+ * Absolute cosine is NOT comparable across domains with this embedder: measured
+ * on the live graph, concepts from one page sit at p50 0.76 for linear algebra
+ * but top out at 0.65 for the stats note, which is *below* the cross-note p50.
+ * Any single global cutoff therefore either islands one note or links everything
+ * in another. So this is a floor that only excludes the genuinely unrelated;
+ * rank (LINK_CANDIDATES) limits recall and the classifier supplies precision by
+ * returning "none". Do not raise this to buy precision -- that is not its job.
+ */
+export const LINK_THRESHOLD = 0.5;
 
 /** How many neighbours to consider linking a new concept to. */
 export const LINK_CANDIDATES = 5;
