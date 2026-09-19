@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { GraphLink, GraphNode } from "@/app/api/graph/route";
 import CommandPalette from "@/components/CommandPalette";
 import ConceptInspector, { type ConceptDetail } from "@/components/ConceptInspector";
+import FlashcardsView from "@/components/FlashcardsView";
 import NoteUploader, { type IngestSummary } from "@/components/NoteUploader";
 import TutorChat from "@/components/TutorChat";
 import type { Layout } from "@/components/GraphView";
@@ -32,6 +33,7 @@ export default function Page() {
   const [trail, setTrail] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [layout, setLayout] = useState<Layout>("web");
+  const [view, setView] = useState<"graph" | "quiz">("graph");
   const [refreshKey, setRefreshKey] = useState(0);
   const [teachTarget, setTeachTarget] = useState<ConceptDetail | null>(null);
   const [teachKey, setTeachKey] = useState(0);
@@ -111,12 +113,25 @@ export default function Page() {
             {(["web", "path"] as Layout[]).map((l) => (
               <button
                 key={l}
-                onClick={() => setLayout(l)}
-                className={`px-2.5 py-1 transition ${layout === l ? "bg-panel-raised text-foreground" : "text-muted hover:text-foreground"}`}
+                onClick={() => {
+                  setLayout(l);
+                  setView("graph");
+                }}
+                className={`px-2.5 py-1 transition ${
+                  view === "graph" && layout === l ? "bg-panel-raised text-foreground" : "text-muted hover:text-foreground"
+                }`}
               >
                 {l === "web" ? "Web" : "Study path"}
               </button>
             ))}
+            <button
+              onClick={() => setView("quiz")}
+              className={`px-2.5 py-1 transition ${
+                view === "quiz" ? "bg-panel-raised text-foreground" : "text-muted hover:text-foreground"
+              }`}
+            >
+              Quiz
+            </button>
           </div>
         </div>
       </header>
@@ -154,9 +169,9 @@ export default function Page() {
           </div>
         </aside>
 
-        {/* Center: the graph */}
+        {/* Center: the graph, or the flashcards page */}
         <main className="flex-1 min-w-0 relative">
-          {(trail.length > 0 || focusNoteId) && (
+          {view === "graph" && (trail.length > 0 || focusNoteId) && (
             <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5 text-[11px] fade-up">
               <button onClick={resetView} className="px-2 py-1 rounded-md bg-panel border border-border hover:border-border-strong transition">
                 Whole graph
@@ -217,7 +232,14 @@ export default function Page() {
             </div>
           )}
 
-          {data ? (
+          {data && view === "quiz" ? (
+            <FlashcardsView
+              nodes={data.nodes}
+              links={data.links}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+            />
+          ) : data ? (
             <GraphView
               nodes={data.nodes}
               links={data.links}
